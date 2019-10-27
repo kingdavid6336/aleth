@@ -43,11 +43,12 @@ State::State(State const& _s):
 OverlayDB State::openDB(fs::path const& _basePath, h256 const& _genesisHash, WithExisting _we)
 {
     fs::path path = _basePath.empty() ? db::databasePath() : _basePath;
-
+    auto const statePath = path / fs::path("state");
     if (db::isDiskDatabase() && _we == WithExisting::Kill)
     {
-        clog(VerbosityDebug, "statedb") << "Killing state database (WithExisting::Kill).";
-        fs::remove_all(path / fs::path("state"));
+        clog(VerbosityDebug, "statedb")
+            << "Killing state database (" << statePath << ") (WithExisting::Kill).";
+        fs::remove_all(statePath);
     }
 
     path /= fs::path(toHex(_genesisHash.ref().cropped(0, 4))) / fs::path(toString(c_databaseVersion));
@@ -59,28 +60,32 @@ OverlayDB State::openDB(fs::path const& _basePath, h256 const& _genesisHash, Wit
 
     try
     {
-		std::unique_ptr<db::DatabaseFace> db = db::DBFactory::create(path / fs::path("state"));
-        clog(VerbosityTrace, "statedb") << "Opened state DB.";
+		std::unique_ptr<db::DatabaseFace> db = db::DBFactory::create(statePath);
+        clog(VerbosityTrace, "statedb") << "Opened state database: " << statePath;
         return OverlayDB(std::move(db));
     }
     catch (boost::exception const& ex)
     {
-        cwarn << boost::diagnostic_information(ex) << '\n';
-        if (!db::isDiskDatabase())
-            throw;
-        else if (fs::space(path / fs::path("state")).available < 1024)
+        clog(VerbosityError, "statedb") << "Failed to create state database: " << statePath;
+        if (db::isDiskDatabase())
         {
-            cwarn << "Not enough available space found on hard drive. Please free some up and then re-run. Bailing.";
-            BOOST_THROW_EXCEPTION(NotEnoughAvailableSpace());
+            if (fs::space(statePath).available < 1024)
+            {
+                clog(VerbosityError, "statedb")
+                    << "Not enough available space found on hard drive. Please free some up and "
+                       "then re-run. Bailing.";
+                BOOST_THROW_EXCEPTION(NotEnoughAvailableSpace());
+            }
+            else
+            {
+                clog(VerbosityError, "statedb") << "Database already open. You appear to have "
+                                                   "another instance of ethereum running. Bailing.";
+                BOOST_THROW_EXCEPTION(DatabaseAlreadyOpen());
+            }
         }
-        else
-        {
-            cwarn <<
-                "Database " <<
-                (path / fs::path("state")) <<
-                "already open. You appear to have another instance of ethereum running. Bailing.";
-            BOOST_THROW_EXCEPTION(DatabaseAlreadyOpen());
-        }
+        clog(VerbosityError, "statedb")
+            << "Unknown database error. Exception details: " << boost::diagnostic_information(ex);
+        throw;
     }
 }
 
